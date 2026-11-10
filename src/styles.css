@@ -1,0 +1,583 @@
+type Task = {
+  id: number
+  title: string
+  course: string
+  branch: string
+  semester: string
+  section: string
+  type: string
+  priority: string
+  status: string
+  due: string
+  notes: string
+}
+
+type Draft = Partial<Task>
+
+const suggestedBranches = [
+  'Computer Science & Engineering',
+  'Information Technology',
+  'Mechanical Engineering',
+  'Civil Engineering',
+  'Electrical Engineering',
+  'Electronics & Communication',
+  'First-year / Common Engineering',
+]
+
+const suggestedCourses = [
+  'Data Structures',
+  'Engineering Mathematics',
+  'Database Management',
+  'Digital Electronics',
+  'Computer Networks',
+  'General',
+]
+
+const courseColors = ['#64748b', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4']
+
+const baseTask: Partial<Task> = {
+  title: '',
+  course: 'Data Structures',
+  branch: '',
+  semester: '',
+  section: '',
+  type: 'Assignment',
+  priority: 'Medium',
+  status: 'To do',
+  due: '',
+  notes: '',
+}
+
+const formatDueDate = (value: string) => {
+  const date = new Date(`${value}T00:00:00Z`)
+  if (Number.isNaN(date.getTime())) return value
+
+  return new Intl.DateTimeFormat('en', {
+    day: 'numeric',
+    month: 'short',
+  }).format(date)
+}
+
+async function taskRequest(options: RequestInit = {}) {
+  try {
+    const response = await fetch('/api/tasks', {
+      ...options,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(20000),
+    })
+
+    const isJson = response.headers.get('content-type')?.includes('application/json')
+    if (!isJson && response.status !== 204) {
+      throw new Error('The task service is unavailable. Please try again shortly.')
+    }
+
+    const data = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      throw new Error(data?.error || 'Your task could not be saved. Please try again.')
+    }
+
+    return data
+  } catch (error) {
+    if (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)) {
+      throw new Error('The task service is taking too long. Please try again.', { cause: error })
+    }
+
+    if (error instanceof TypeError) {
+      throw new Error('Unable to reach the task service. Check your connection and try again.', {
+        cause: error,
+      })
+    }
+
+    throw error
+  }
+}
+
+export function Home() {
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [course, setCourse] = useState('All courses')
+  const [branch, setBranch] = useState('')
+  const [semester, setSemester] = useState('')
+  const [tab, setTab] = useState('All tasks')
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState(false)
+  const [selectedDay, setSelectedDay] = useState('')
+  const [open, setOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [pendingIds, setPendingIds] = useState<number[]>([])
+  const [draft, setDraft] = useState<Draft>(baseTask)
+
+  const courses = useMemo(
+    () => [...new Set([...suggestedCourses, ...tasks.map((task) => task.course)])],
+    [tasks],
+  )
+
+  const branches = useMemo(
+    () => [...new Set([...suggestedBranches, ...tasks.map((task) => task.branch).filter(Boolean)])],
+    [tasks],
+  )
+
+  const load = async () => {
+    setLoading(true)
+    setError('')
+
+    try {
+      const data = await taskRequest({ method: 'GET' })
+      if (!Array.isArray(data)) {
+        throw new Error('Unable to load your tasks. Please try again.')
+      }
+      setTasks(data)
+    } catch (exception) {
+      const message = exception instanceof Error ? exception.message : 'Unable to load your tasks.'
+      setError(message)
+      const demoTasks: Task[] = [
+        {
+          id: 1,
+          title: 'Prepare lab record',
+          course: 'Data Structures',
+          branch: 'Computer Science & Engineering',
+          semester: '3',
+          section: 'B',
+          type: 'Assignment',
+          priority: 'Medium',
+          status: 'To do',
+          due: '2026-11-12',
+          notes: '',
+        },
+        {
+          id: 2,
+          title: 'Database revision',
+          course: 'Database Management',
+          branch: 'Computer Science & Engineering',
+          semester: '5',
+          section: 'A',
+          type: 'Exam',
+          priority: 'High',
+          status: 'In progress',
+          due: '2026-11-14',
+          notes: '',
+        },
+      ]
+      setTasks(demoTasks)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+  }, [])
+
+  const filteredTasks = tasks
+    .filter((task) => {
+      const matchesCourse = course === 'All courses' || task.course === course
+      const matchesBranch = !branch || task.branch === branch
+      const matchesSemester = !semester || task.semester === semester
+      const matchesTab = tab === 'All tasks' || task.status === tab
+      const matchesDay = !selectedDay || task.due === selectedDay
+      const haystack = `${task.title} ${task.course} ${task.branch} ${task.section}`.toLowerCase()
+      const matchesQuery = haystack.includes(query.toLowerCase())
+
+      return matchesCourse && matchesBranch && matchesSemester && matchesTab && matchesDay && matchesQuery
+    })
+    .sort((a, b) => {
+      if (sort) {
+        const priorityOrder = { High: 3, Medium: 2, Low: 1 }
+        return priorityOrder[b.priority as keyof typeof priorityOrder] - priorityOrder[a.priority as keyof typeof priorityOrder]
+      }
+
+      return new Date(a.due).getTime() - new Date(b.due).getTime()
+    })
+
+  const completed = tasks.filter((task) => task.status === 'Completed').length
+  const pending = tasks.filter((task) => task.status !== 'Completed').length
+
+  const openNewTask = () => {
+    setDraft({ ...baseTask, due: new Date().toISOString().slice(0, 10), course: course !== 'All courses' ? course : 'Data Structures', branch, semester })
+    setOpen(true)
+  }
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault()
+
+    if (!draft.title || !draft.course || !draft.due) {
+      setError('Please add a task name, course and due date.')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+
+    try {
+      const payload = {
+        ...draft,
+        title: draft.title.trim(),
+        course: draft.course.trim(),
+        branch: draft.branch ?? '',
+        semester: draft.semester ?? '',
+        section: draft.section ?? '',
+        due: draft.due,
+        status: draft.status ?? 'To do',
+        priority: draft.priority ?? 'Medium',
+        type: draft.type ?? 'Assignment',
+        notes: draft.notes ?? '',
+      }
+
+      const method = draft.id ? 'PATCH' : 'POST'
+      const data = await taskRequest({
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(method === 'PATCH' ? { ...payload, id: draft.id } : payload),
+      })
+
+      setTasks((current) => {
+        if (method === 'PATCH') {
+          return current.map((task) => (task.id === data.id ? data : task))
+        }
+        return [data, ...current]
+      })
+
+      setOpen(false)
+      setDraft({ ...baseTask, due: new Date().toISOString().slice(0, 10), course: course !== 'All courses' ? course : 'Data Structures' })
+    } catch (exception) {
+      const message = exception instanceof Error ? exception.message : 'Unable to save task.'
+      setError(message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggleTask = async (task: Task) => {
+    if (pendingIds.includes(task.id)) return
+
+    setPendingIds((current) => [...current, task.id])
+
+    try {
+      const nextStatus = task.status === 'Completed' ? 'To do' : 'Completed'
+      const updated = await taskRequest({
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...task, status: nextStatus, id: task.id }),
+      })
+
+      setTasks((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+    } catch (exception) {
+      const message = exception instanceof Error ? exception.message : 'Unable to update task.'
+      setError(message)
+    } finally {
+      setPendingIds((current) => current.filter((id) => id !== task.id))
+    }
+  }
+
+  const removeTask = async () => {
+    if (!draft.id) return
+
+    try {
+      await taskRequest({
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: draft.id }),
+      })
+
+      setTasks((current) => current.filter((task) => task.id !== draft.id))
+      setOpen(false)
+      setDraft({ ...baseTask, due: new Date().toISOString().slice(0, 10) })
+    } catch (exception) {
+      const message = exception instanceof Error ? exception.message : 'Unable to delete task.'
+      setError(message)
+    }
+  }
+
+  return (
+    <main className="task-app-shell">
+      <header className="app-header">
+        <div>
+          <p className="eyebrow">TaskStatus.java</p>
+          <h1>My tasks</h1>
+        </div>
+
+        <button className="primary-button" onClick={openNewTask} disabled={loading}>
+          + Create task
+        </button>
+      </header>
+
+      <section className="summary-strip">
+        <div className="summary-card">
+          <span>Pending</span>
+          <strong>{pending}</strong>
+        </div>
+        <div className="summary-card">
+          <span>Completed</span>
+          <strong>{completed}</strong>
+        </div>
+        <div className="summary-card">
+          <span>Courses</span>
+          <strong>{courses.length}</strong>
+        </div>
+      </section>
+
+      <section className="filters">
+        <label>
+          Course
+          <select value={course} onChange={(event) => setCourse(event.target.value)}>
+            <option value="All courses">All courses</option>
+            {courses.map((courseName) => (
+              <option key={courseName} value={courseName}>
+                {courseName}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Branch
+          <select value={branch} onChange={(event) => setBranch(event.target.value)}>
+            <option value="">All branches</option>
+            {branches.map((branchName) => (
+              <option key={branchName} value={branchName}>
+                {branchName}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Semester
+          <select value={semester} onChange={(event) => setSemester(event.target.value)}>
+            <option value="">All semesters</option>
+            {Array.from({ length: 8 }, (_, index) => (
+              <option key={index + 1} value={String(index + 1)}>
+                Semester {index + 1}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Search
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tasks" />
+        </label>
+      </section>
+
+      <section className="toolbar">
+        <div className="tabs" role="tablist" aria-label="Task grouping">
+          {['All tasks', 'To do', 'In progress', 'Completed'].map((value) => (
+            <button
+              key={value}
+              className={tab === value ? 'tab active' : 'tab'}
+              onClick={() => setTab(value)}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+
+        <button className="text-button" onClick={() => setSort((current) => !current)}>
+          {sort ? 'Sort: priority' : 'Sort: due date'}
+        </button>
+      </section>
+
+      {error ? <p className="error-banner">{error}</p> : null}
+
+      <section className="task-list">
+        {loading ? (
+          <p className="empty-state">Loading tasks...</p>
+        ) : filteredTasks.length === 0 ? (
+          <p className="empty-state">No tasks match these filters.</p>
+        ) : (
+          filteredTasks.map((task) => (
+            <article key={task.id} className="task-card" onClick={() => {
+              setDraft(task)
+              setOpen(true)
+            }}>
+              <div className="task-topline">
+                <button
+                  className="task-check"
+                  aria-label={`${task.status === 'Completed' ? 'Reopen' : 'Complete'} ${task.title}`}
+                  disabled={pendingIds.includes(task.id)}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void toggleTask(task)
+                  }}
+                >
+                  {task.status === 'Completed' ? '✓' : '○'}
+                </button>
+
+                <div className="task-copy">
+                  <h2>{task.title}</h2>
+                  <div className="task-metadata">
+                    <span>{task.course}</span>
+                    <span>•</span>
+                    <span>{task.type}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="task-details">
+                <span>{task.branch || 'No branch'}</span>
+                {task.semester ? <span>Sem {task.semester}</span> : null}
+                {task.section ? <span>Section {task.section}</span> : null}
+              </div>
+
+              <div className="task-footer">
+                <span className="chip" style={{ background: `${courseColors[(courses.indexOf(task.course) + courseColors.length) % courseColors.length]}22`, color: '#1f2937' }}>
+                  {task.priority}
+                </span>
+                <span className="task-date">{formatDueDate(task.due)}</span>
+              </div>
+            </article>
+          ))
+        )}
+      </section>
+
+      {open ? (
+        <div className="modal-backdrop" onClick={() => setOpen(false)}>
+          <div className="modal-panel" onClick={(event) => event.stopPropagation()}>
+            <form onSubmit={save}>
+              <div className="modal-header">
+                <h3>{draft.id ? 'Edit task' : 'Create task'}</h3>
+                <button type="button" className="close-button" onClick={() => setOpen(false)}>
+                  ×
+                </button>
+              </div>
+
+              <label>
+                Task name
+                <input
+                  value={draft.title ?? ''}
+                  onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
+                  placeholder="Prepare lab record"
+                  required
+                />
+              </label>
+
+              <div className="form-grid">
+                <label>
+                  Subject / course
+                  <input
+                    list="course-suggestions"
+                    value={draft.course ?? ''}
+                    onChange={(event) => setDraft((current) => ({ ...current, course: event.target.value }))}
+                    required
+                  />
+                  <datalist id="course-suggestions">
+                    {courses.map((courseName) => (
+                      <option key={courseName} value={courseName} />
+                    ))}
+                  </datalist>
+                </label>
+
+                <label>
+                  Due date
+                  <input
+                    type="date"
+                    value={draft.due ?? ''}
+                    onChange={(event) => setDraft((current) => ({ ...current, due: event.target.value }))}
+                    required
+                  />
+                </label>
+              </div>
+
+              <fieldset className="academic-fields">
+                <legend>Academic details</legend>
+
+                <label>
+                  Branch name
+                  <input
+                    list="branch-suggestions"
+                    value={draft.branch ?? ''}
+                    onChange={(event) => setDraft((current) => ({ ...current, branch: event.target.value }))}
+                  />
+                  <datalist id="branch-suggestions">
+                    {branches.map((branchName) => (
+                      <option key={branchName} value={branchName} />
+                    ))}
+                  </datalist>
+                </label>
+
+                <div className="form-grid">
+                  <label>
+                    Semester
+                    <select
+                      value={draft.semester ?? ''}
+                      onChange={(event) => setDraft((current) => ({ ...current, semester: event.target.value }))}
+                    >
+                      <option value="">Not specified</option>
+                      {Array.from({ length: 8 }, (_, index) => (
+                        <option key={index + 1} value={String(index + 1)}>
+                          Semester {index + 1}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Section / batch
+                    <input
+                      value={draft.section ?? ''}
+                      onChange={(event) => setDraft((current) => ({ ...current, section: event.target.value }))}
+                    />
+                  </label>
+                </div>
+              </fieldset>
+
+              <div className="form-grid">
+                <label>
+                  Task type
+                  <select
+                    value={draft.type ?? 'Assignment'}
+                    onChange={(event) => setDraft((current) => ({ ...current, type: event.target.value }))}
+                  >
+                    {['Assignment', 'Lab work', 'Exam', 'Project', 'Personal'].map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Priority
+                  <select
+                    value={draft.priority ?? 'Medium'}
+                    onChange={(event) => setDraft((current) => ({ ...current, priority: event.target.value }))}
+                  >
+                    {['High', 'Medium', 'Low'].map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label>
+                Notes
+                <textarea
+                  rows={3}
+                  value={draft.notes ?? ''}
+                  onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))}
+                />
+              </label>
+
+              <div className="modal-footer">
+                {draft.id ? (
+                  <button type="button" className="danger-button" onClick={removeTask}>
+                    Delete
+                  </button>
+                ) : null}
+
+                <button type="submit" className="primary-button" disabled={saving}>
+                  {saving ? 'Saving...' : draft.id ? 'Save changes' : 'Create task'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+    </main>
+  )
+}
