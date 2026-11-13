@@ -198,8 +198,6 @@ export function Home() {
     .sort((a, b) => a.due.localeCompare(b.due))
     .slice(0, 4)
 
-  const recentTasks = [...tasks].sort((a, b) => b.id - a.id).slice(0, 5)
-
   function addActivity(message: string, taskTitle: string) {
     setActivity((current) => [
       { id: Date.now(), message, taskTitle, createdAt: new Date().toISOString() },
@@ -306,7 +304,6 @@ export function Home() {
                 onChange={(event) => { setQuery(event.target.value); setActiveView('tasks') }}
                 placeholder="Search your tasks..."
               />
-              <kbd>⌘ K</kbd>
             </label>
             <button className="header-add" onClick={() => setDraft(defaultDraft())}><Icon name="plus" size={17} /><span>New task</span></button>
             <div className="header-avatar" aria-label="My workspace">IT</div>
